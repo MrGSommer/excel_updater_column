@@ -5,265 +5,268 @@ from datetime import datetime
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
-# 📁 App-Layout
+# ── App-Layout ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="IFC Räume Excel Vergleich", layout="wide")
 st.title("🔍 Excel Vergleichstool für IFC-Räume")
 
-# 📤 Datei-Uploads
+# ── Upload ───────────────────────────────────────────────────────────────────
 orig_file = st.file_uploader("Original Excel hochladen", type=["xlsx"])
 upd_file  = st.file_uploader("Update Excel hochladen",   type=["xlsx"])
 
-if orig_file and upd_file:
-    try:
-        df_orig_base = pd.read_excel(orig_file)
-        df_upd_base  = pd.read_excel(upd_file)
+if not (orig_file and upd_file):
+    st.info("Bitte beide Dateien hochladen, um zu vergleichen.")
+    st.stop()
 
-        # — Filter —
-        non_num_cols = df_orig_base.select_dtypes(exclude=["number"]).columns.tolist()
-        if non_num_cols:
-            filter_col = st.selectbox("Filter-Spalte", non_num_cols)
-            vals       = df_orig_base[filter_col].dropna().unique().tolist()
-            sel        = st.multiselect("Filter-Werte", vals, default=vals)
-            df_orig    = df_orig_base[df_orig_base[filter_col].isin(sel)].reset_index(drop=True)
-            df_upd     = df_upd_base [df_upd_base [filter_col].isin(sel)].reset_index(drop=True)
-        else:
-            df_orig = df_orig_base.copy()
-            df_upd  = df_upd_base.copy()
+# ── Einlesen & Filter ────────────────────────────────────────────────────────
+df_base = pd.read_excel(orig_file)
+df_upd_base = pd.read_excel(upd_file)
 
-        # — Sidebar Metriken —
-        for df in (df_orig, df_upd):
-            if "Fläche" in df.columns:
-                df["Fläche"] = pd.to_numeric(df["Fläche"], errors="coerce")
-        n_o, n_u = len(df_orig), len(df_upd)
-        g_o, g_u = df_orig["GUID"].nunique(), df_upd["GUID"].nunique()
-        s_o = df_orig["Fläche"].sum() if "Fläche" in df_orig.columns else 0
-        s_u = df_upd["Fläche"].sum()   if "Fläche" in df_upd.columns   else 0
+# Filtern über eine nicht-numerische Spalte (z.B. Ausmasscode)
+non_num = df_base.select_dtypes(exclude="number").columns.tolist()
+if non_num:
+    fc = st.selectbox("Filter-Spalte", non_num)
+    vals = df_base[fc].dropna().unique().tolist()
+    sel = st.multiselect("Filter-Werte", vals, default=vals)
+    df = df_base[df_base[fc].isin(sel)].reset_index(drop=True)
+    df_upd = df_upd_base[df_upd_base[fc].isin(sel)].reset_index(drop=True)
+else:
+    df = df_base.copy()
+    df_upd = df_upd_base.copy()
 
-        st.sidebar.header("📊 Kurzübersicht")
-        st.sidebar.metric("Zeilen O/U", n_o, delta=n_u-n_o)
-        st.sidebar.metric("GUIDs O/U", g_o, delta=g_u-g_o)
-        st.sidebar.metric("Fläche O/U", f"{s_o:.2f}", delta=f"{(s_u-s_o):.2f}")
+# ── Sidebar-Kennzahlen ───────────────────────────────────────────────────────
+for tmp in (df, df_upd):
+    if "Fläche" in tmp.columns:
+        tmp["Fläche"] = pd.to_numeric(tmp["Fläche"], errors="coerce")
 
-        # — Vorschau —
-        st.subheader("🔍 Vorschau")
-        c1, c2 = st.columns(2)
-        c1.dataframe(df_orig.head(5), use_container_width=True)
-        c2.dataframe(df_upd.head(5),  use_container_width=True)
+st.sidebar.header("📊 Kurzübersicht")
+st.sidebar.metric("Zeilen O/U", len(df), len(df_upd) - len(df))
+st.sidebar.metric("GUIDs O/U", df["GUID"].nunique(), df_upd["GUID"].nunique() - df["GUID"].nunique())
+if "Fläche" in df.columns:
+    st.sidebar.metric("Summe Fläche O/U",
+                       f"{df['Fläche'].sum():.2f}",
+                       f"{df_upd['Fläche'].sum() - df['Fläche'].sum():+.2f}")
 
-        # — Gemeinsame Spalten prüfen —
-        common = sorted(set(df_orig.columns) & set(df_upd.columns))
-        if "GUID" not in common:
-            st.error("Spalte 'GUID' fehlt."); st.stop()
+# ── Vorschau ────────────────────────────────────────────────────────────────
+st.subheader("🔍 Vorschau (erste 5 Zeilen)")
+c1, c2 = st.columns(2)
+with c1:
+    st.write("Original")
+    st.dataframe(df.head(5), use_container_width=True)
+with c2:
+    st.write("Update")
+    st.dataframe(df_upd.head(5), use_container_width=True)
 
-        # — Gruppensummen —
-        st.subheader("📊 Gruppen-Summen")
-        grp = st.selectbox("Gruppieren nach", common, index=common.index("Haus") if "Haus" in common else 0)
-        if "Fläche" in common:
-            sum_o = df_orig.groupby(grp)["Fläche"].sum().reset_index(name="Summe O")
-            sum_u = df_upd.groupby(grp)["Fläche"].sum().reset_index(name="Summe U")
-            st.dataframe(pd.merge(sum_o, sum_u, on=grp, how="outer").fillna(0), use_container_width=True)
+# ── Spalten prüfen & Summen ─────────────────────────────────────────────────
+common = sorted(set(df.columns) & set(df_upd.columns))
+if "GUID" not in common:
+    st.error("Spalte 'GUID' fehlt in einer der Dateien.")
+    st.stop()
 
-        # — Parameter —
-        match_cols     = st.multiselect("GUID-Matching", common, default=["GUID"])
-        overwrite_cols = st.multiselect("Überschreiben", common, default=["Fläche"])
-        add_cols       = st.multiselect("Ergänzen", [c for c in df_upd.columns if c not in df_orig.columns])
-        fb_cols        = st.multiselect("Fallback-Spalten", [c for c in common if c not in match_cols])
-        tol            = st.number_input("Toleranz (m²)", 0.0, 5.0, 0.5, 0.1)
+st.subheader("📊 Flächen-Summen nach Gruppe")
+group = st.selectbox("Gruppieren nach", common, index=common.index("Haus") if "Haus" in common else 0)
+if "Fläche" in common:
+    so = df.groupby(group)["Fläche"].sum().reset_index(name="Summe O")
+    su = df_upd.groupby(group)["Fläche"].sum().reset_index(name="Summe U")
+    st.dataframe(pd.merge(so, su, on=group, how="outer").fillna(0), use_container_width=True)
 
-        # — Existenzprüfung —
-        exist_cols = st.multiselect("Existenz-Attribute", [c for c in common if c!="GUID"])
-        adopt = []
-        if exist_cols:
-            orig_set = {tuple(r[c] for c in exist_cols) for _, r in df_orig.iterrows()}
-            upd_sub  = df_upd.drop_duplicates(exist_cols)
-            miss     = upd_sub[~upd_sub.apply(lambda r: tuple(r[c] for c in exist_cols) in orig_set, axis=1)]
-            if not miss.empty:
-                st.subheader("⚠️ Fehlende Kombinationen")
-                for i, r in miss.iterrows():
-                    lbl = " | ".join(f"{c}:{r[c]}" for c in exist_cols)
-                    if st.checkbox(f"Übernehmen {lbl}", key=f"cb{i}"):
-                        adopt.append(tuple(r[c] for c in exist_cols))
+# ── Matching-Parameter ─────────────────────────────────────────────────────
+match_cols     = st.multiselect("GUID-Matching", common, default=["GUID"])
+overwrite_cols = st.multiselect("Zu überschreiben", common, default=["Fläche"])
+add_cols       = st.multiselect("Ergänzen aus Update", [c for c in df_upd.columns if c not in df.columns])
+fb_cols        = st.multiselect("Fallback-Matching-Spalten", [c for c in common if c not in match_cols])
+tol            = st.number_input("Toleranz (m²)", min_value=0.0, max_value=100.0, value=0.5, step=0.1)
 
-        # — Vergleich —
-        if st.button("Vergleich starten"):
-            df = df_orig.copy()
-            full_map = df_upd.set_index(match_cols, drop=False)
-            fb_map   = df_upd.set_index(fb_cols, drop=False) if fb_cols else None
+# ── Existenzprüfung ─────────────────────────────────────────────────────────
+exist_cols = st.multiselect("Existenz-Attribute (für neue Einträge)", [c for c in common if c != "GUID"])
+adopt = []
+if exist_cols:
+    orig_set = {tuple(r[c] for c in exist_cols) for _, r in df.iterrows()}
+    candidates = df_upd.drop_duplicates(exist_cols)
+    missing = candidates[~candidates.apply(lambda r: tuple(r[c] for c in exist_cols) in orig_set, axis=1)]
+    if not missing.empty:
+        st.subheader("⚠️ Fehlende Kombinationen im Original")
+        for i, r in missing.iterrows():
+            label = " | ".join(f"{c}: {r[c]}" for c in exist_cols)
+            if st.checkbox(f"Übernehmen: {label}", key=f"adopt_{i}"):
+                adopt.append(tuple(r[c] for c in exist_cols))
 
-            matched, idx_guid, idx_fb = set(), set(), set()
-            green, blue, orange, yellow, red, lavender = set(), set(), set(), set(), set(), set()
-            c_guid = c_fb = c_area = c_unc = c_new = 0
-            total = len(df) + len(full_map)
-            pbar  = st.progress(0); step = 0
+# ── Vergleich laufen lassen ──────────────────────────────────────────────────
+if st.button("Vergleich starten"):
+    df_out = df.copy()
+    full_map   = df_upd.set_index(match_cols, drop=False)
+    fb_map     = df_upd.set_index(fb_cols,   drop=False) if fb_cols else None
 
-            # 1) GUID & Fallback
-            for i in range(len(df)):
-                row = df.loc[i]
-                key = tuple(row[c] for c in match_cols)
-                # GUID-Match?
-                if key in full_map.index:
-                    upd = full_map.loc[key]
-                    if isinstance(upd, pd.DataFrame): upd = upd.iloc[0]
-                    if isinstance(upd, pd.Series):
-                        matched.add(key); idx_guid.add(i)
-                        used = False
-                        for c in overwrite_cols:
-                            nv, ov = upd[c], row[c]
-                            if pd.notna(nv) and nv != ov:
-                                df.at[i, f"{c} zuvor"] = ov
-                                df.at[i, c]            = nv
-                                green.add((i+2, df.columns.get_loc(c)+1))
-                                used = True
-                        for c in add_cols:
-                            df.at[i, c] = upd[c]
-                        c_guid += 1 if used else (c_unc := c_unc+1)
-                # Fallback-Match?
-                elif fb_map is not None:
-                    fk = tuple(row[c] for c in fb_cols)
-                    if fk in fb_map.index:
-                        fbr = fb_map.loc[fk]
-                        if isinstance(fbr, pd.DataFrame) and len(fbr) == 1:
-                            fbr = fbr.iloc[0]
-                        if isinstance(fbr, pd.Series):
-                            fullk = tuple(fbr[c] for c in match_cols)
-                            if fullk in full_map.index and fullk not in matched:
-                                matched.add(fullk); idx_fb.add(i)
-                                used_fb = False
-                                for c in overwrite_cols:
-                                    nv, ov = fbr[c], row[c]
-                                    if pd.notna(nv) and nv != ov:
-                                        df.at[i, f"{c} zuvor"] = ov
-                                        df.at[i, c]            = nv
-                                        blue.add((i+2, df.columns.get_loc(c)+1))
-                                        used_fb = True
-                                for c in add_cols:
-                                    df.at[i, c] = fbr[c]
-                                # Fallback ohne Änderung?
-                                if not used_fb:
-                                    for c in fb_cols:
-                                        r = i+2
-                                        c_idx = df.columns.get_loc(c)+1
-                                        lavender.add((r, c_idx))
-                                c_fb += 1 if used_fb else (c_unc := c_unc+1)
+    # Tracking und Highlight-Sets
+    matched     = set()
+    idx_guid    = set()
+    idx_fb      = set()
+    green, blue, orange, yellow, red, lav = set(), set(), set(), set(), set(), set()
+    cnt_guid = cnt_fb = cnt_tol = cnt_new = cnt_unc = 0
 
-                step += 1
-                pbar.progress(min(1.0, step/total))
+    total = len(df_out) + len(full_map)
+    pbar  = st.progress(0); step = 0
 
-            # 2) Toleranz-Matching
-            orig_un = {i for i in range(len(df)) if i not in idx_guid|idx_fb}
-            upd_un  = [k for k in full_map.index if k not in matched]
-            pairs = []
-            for i in orig_un:
-                o = df.loc[i]
-                for k in upd_un:
-                    u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
-                    if all(o[c] == u[c] for c in fb_cols):
-                        diff = abs(o["Fläche"] - u["Fläche"])
-                        if diff <= tol:
-                            pairs.append((i, k, diff))
-                        else:
-                            # Toleranz überschritten → rot markieren
-                            red.add((i+2, df.columns.get_loc("Fläche")+1))
-            pairs.sort(key=lambda x: x[2])
-            for i, k, _ in pairs:
-                if i not in idx_guid|idx_fb and k not in matched:
-                    u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
+    # 1) GUID-Matching
+    for i in range(len(df_out)):
+        row = df_out.loc[i]
+        key = tuple(row[c] for c in match_cols)
+        if key in full_map.index:
+            upd = full_map.loc[key]
+            if isinstance(upd, pd.DataFrame): upd = upd.iloc[0]
+            # jetzt eine Series
+            used = False
+            for c in overwrite_cols:
+                nv, ov = upd[c], row[c]
+                if pd.notna(nv) and nv != ov:
+                    df_out.at[i, f"{c} zuvor"] = ov
+                    df_out.at[i, c]            = nv
+                    green.add((i+2, df_out.columns.get_loc(c)+1))
+                    used = True
+            for c in add_cols:
+                df_out.at[i, c] = upd[c]
+            cnt_guid += 1 if used else (cnt_unc := cnt_unc+1)
+            matched.add(key)
+            idx_guid.add(i)
+        step += 1; pbar.progress(min(1.0, step/total))
+
+    # 2) Fallback-Matching
+    if fb_cols:
+        for i in range(len(df_out)):
+            if i in idx_guid: continue
+            row = df_out.loc[i]
+            fkey = tuple(row[c] for c in fb_cols)
+            if fb_map is None or fkey not in fb_map.index:
+                continue
+            fbr = fb_map.loc[fkey]
+            if isinstance(fbr, pd.DataFrame) and len(fbr)==1:
+                fbr = fbr.iloc[0]
+            if isinstance(fbr, pd.Series):
+                fullk = tuple(fbr[c] for c in match_cols)
+                if fullk in full_map.index and fullk not in matched:
+                    used_fb = False
                     for c in overwrite_cols:
-                        ov = df.at[i, c]
-                        df.at[i, f"{c} zuvor"] = ov
-                        df.at[i, c]            = u[c]
-                        orange.add((i+2, df.columns.get_loc(c)+1))
+                        nv, ov = fbr[c], row[c]
+                        if pd.notna(nv) and nv != ov:
+                            df_out.at[i, f"{c} zuvor"] = ov
+                            df_out.at[i, c]            = nv
+                            blue.add((i+2, df_out.columns.get_loc(c)+1))
+                            used_fb = True
                     for c in add_cols:
-                        df.at[i, c] = u[c]
-                    matched.add(k)
-                    c_area += 1
+                        df_out.at[i, c] = fbr[c]
+                    if not used_fb:
+                        # Fallback-Match ohne Änderung → Lavendel
+                        for c in fb_cols:
+                            lav.add((i+2, df_out.columns.get_loc(c)+1))
+                    cnt_fb += 1 if used_fb else (cnt_unc := cnt_unc+1)
+                    matched.add(fullk)
+                    idx_fb.add(i)
+            step += 1; pbar.progress(min(1.0, step/total))
 
-            step += len(upd_un)
-            pbar.progress(1.0)
+        # 3) Toleranz-Matching (nur innerhalb gleicher fb-Kombi)
+        orig_un = {i for i in range(len(df_out)) if i not in idx_guid|idx_fb}
+        upd_un  = [k for k in full_map.index if k not in matched]
+        pairs   = []
+        for i in orig_un:
+            o = df_out.loc[i]
+            for k in upd_un:
+                u = full_map.loc[k]
+                if isinstance(u, pd.DataFrame): u = u.iloc[0]
+                if all(o[c]==u[c] for c in fb_cols):
+                    diff = abs(o["Fläche"] - u["Fläche"])
+                    if diff <= tol:
+                        pairs.append((i,k,diff))
+                    else:
+                        red.add((i+2, df_out.columns.get_loc("Fläche")+1))
+        pairs.sort(key=lambda x: x[2])
+        for i,k,_ in pairs:
+            if i not in idx_guid|idx_fb and k not in matched:
+                u = full_map.loc[k]
+                if isinstance(u, pd.DataFrame): u = u.iloc[0]
+                for c in overwrite_cols:
+                    ov = df_out.at[i,c]
+                    df_out.at[i, f"{c} zuvor"] = ov
+                    df_out.at[i, c]            = u[c]
+                    orange.add((i+2, df_out.columns.get_loc(c)+1))
+                for c in add_cols:
+                    df_out.at[i,c] = u[c]
+                cnt_tol += 1
+                matched.add(k)
+        # Entferne Rot, wenn Orange drüber liegt
+        red -= orange
+        step += len(upd_un); pbar.progress(1.0)
 
-            # 3) Neueinträge & Existenz
-            for k in full_map.index.unique():
-                if k not in matched:
-                    u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
-                    if exist_cols:
-                        ek = tuple(u[c] for c in exist_cols)
-                        if ek not in adopt:
-                            continue
-                    d = u.to_dict()
-                    for c in overwrite_cols:
-                        d[f"{c} zuvor"] = None
-                    df = pd.concat([df, pd.DataFrame([d])], ignore_index=True)
-                    ni = len(df) - 1
-                    for ci in range(len(df.columns)):
-                        yellow.add((ni+2, ci+1))
-                    matched.add(k)
-                    c_new += 1
+    # 4) Neueinträge
+    for k in full_map.index.unique():
+        if k not in matched:
+            u  = full_map.loc[k]
+            if isinstance(u, pd.DataFrame): u = u.iloc[0]
+            if exist_cols:
+                ek = tuple(u[c] for c in exist_cols)
+                if ek not in adopt:
+                    continue
+            d = u.to_dict()
+            for c in overwrite_cols:
+                d[f"{c} zuvor"] = None
+            df_out = pd.concat([df_out, pd.DataFrame([d])], ignore_index=True)
+            ni = len(df_out)-1
+            for ci in range(len(df_out.columns)):
+                yellow.add((ni+2, ci+1))
+            cnt_new += 1
 
-            # Spalten ordnen
-            base = list(df_orig_base.columns)
-            order = []
-            for c in base:
-                order.append(c)
-                pv = f"{c} zuvor"
-                if pv in df.columns:
-                    order.append(pv)
-            for c in df.columns:
-                if c not in order:
-                    order.append(c)
-            df = df[order]
+    # Spalten neu anordnen: "... zuvor" immer rechts
+    base = list(df_base.columns)
+    order=[]
+    for c in base:
+        order.append(c)
+        pv=f"{c} zuvor"
+        if pv in df_out.columns:
+            order.append(pv)
+    for c in df_out.columns:
+        if c not in order: order.append(c)
+    df_out = df_out[order]
 
-            # 4) Export mit Styling
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                df.to_excel(writer, sheet_name="Vergleich", index=False)
-                wb, ws = writer.book, writer.sheets["Vergleich"]
-                ws.freeze_panes = "A2"
-                mc, mr = len(df.columns), len(df) + 1
-                ws.auto_filter.ref = f"A1:{get_column_letter(mc)}{mr}"
-                fmt = {
-                    "g": PatternFill(start_color="CCFFCC", fill_type="solid"),
-                    "b": PatternFill(start_color="ADD8E6", fill_type="solid"),
-                    "o": PatternFill(start_color="FFD966", fill_type="solid"),
-                    "y": PatternFill(start_color="FFFF00", fill_type="solid"),
-                    "r": PatternFill(start_color="FFC7CE", fill_type="solid"),
-                    "l": PatternFill(start_color="E6E6FA", fill_type="solid")  # Lavendel
-                }
-                for (r, c) in green:
-                    ws.cell(row=r, column=c).fill = fmt["g"]
-                for (r, c) in blue:
-                    ws.cell(row=r, column=c).fill = fmt["b"]
-                for (r, c) in orange:
-                    ws.cell(row=r, column=c).fill = fmt["o"]
-                for (r, c) in yellow:
-                    ws.cell(row=r, column=c).fill = fmt["y"]
-                for (r, c) in red:
-                    ws.cell(row=r, column=c).fill = fmt["r"]
-                for (r, c) in lavender:
-                    ws.cell(row=r, column=c).fill = fmt["l"]
-            buf.seek(0)
+    # ── Export mit Styling ─────────────────────────────────────────────────
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df_out.to_excel(w, sheet_name="Vergleich", index=False)
+        wb, ws = w.book, w.sheets["Vergleich"]
+        ws.freeze_panes = "A2"
+        max_c, max_r = len(df_out.columns), len(df_out)+1
+        ws.auto_filter.ref = f"A1:{get_column_letter(max_c)}{max_r}"
+        fmt = {
+            "g": PatternFill(start_color="CCFFCC", fill_type="solid"),
+            "b": PatternFill(start_color="ADD8E6", fill_type="solid"),
+            "o": PatternFill(start_color="FFD966", fill_type="solid"),
+            "y": PatternFill(start_color="FFFF00", fill_type="solid"),
+            "r": PatternFill(start_color="FFC7CE", fill_type="solid"),
+            "l": PatternFill(start_color="E6E6FA", fill_type="solid"),
+        }
+        # Zeichnen in der Reihenfolge: Grün, Blau, Rot, Orange, Gelb, Lavendel
+        for (r,c) in green:    ws.cell(r,c).fill = fmt["g"]
+        for (r,c) in blue:     ws.cell(r,c).fill = fmt["b"]
+        for (r,c) in red:      ws.cell(r,c).fill = fmt["r"]
+        for (r,c) in orange:   ws.cell(r,c).fill = fmt["o"]
+        for (r,c) in yellow:   ws.cell(r,c).fill = fmt["y"]
+        for (r,c) in lav:      ws.cell(r,c).fill = fmt["l"]
+    buf.seek(0)
 
-            # Zusammenfassung
-            st.markdown("### Zusammenfassung")
-            st.success(f"🔁 GUID-Updates: {c_guid}")
-            st.info   (f"🔷 Fallback-Updates: {c_fb}")
-            st.info   (f"🔶 Toleranz-Updates: {c_area}")
-            st.warning(f"❌ Toleranz überschritten (rot): {len(red)}")
-            st.info   (f"🔮 Fallback ohne Änderung (lavendel): {len(lavender)}")
-            st.info   (f"➕ Neu übernommen: {c_new}")
-            st.info   (f"✅ Unverändert: {c_unc}")
+    # ── Zusammenfassung ───────────────────────────────────────────────────────
+    st.markdown("### Zusammenfassung")
+    st.success(f"🔁 GUID-Updates: {cnt_guid}")
+    st.info   (f"🔷 Fallback-Updates: {cnt_fb}")
+    st.info   (f"🔶 Toleranz-Updates ≤{tol} m²: {cnt_tol}")
+    st.warning(f"❌ Toleranz überschritten >{tol} m²: {len(red)}")
+    st.info   (f"🔮 Fallback ohne Änderung: {len(lav)}")
+    st.info   (f"➕ Neueinträge übernommen: {cnt_new}")
+    st.info   (f"✅ Unverändert: {cnt_unc}")
 
-            # Download
-            ds   = datetime.now().strftime("%y.%m.%d")
-            name = orig_file.name.replace(".xlsx", "")
-            st.download_button(
-                "📥 Herunterladen",
-                buf.getvalue(),
-                file_name=f"Updated_{ds}_{name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    # ── Download ─────────────────────────────────────────────────────────────
+    name = orig_file.name.replace(".xlsx","")
+    ds   = datetime.now().strftime("%y.%m.%d")
+    st.download_button(
+        "📥 Datei herunterladen",
+        buf.getvalue(),
+        file_name=f"Updated_{ds}_{name}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-    except Exception as e:
-        st.error(f"Fehler: {e}")
