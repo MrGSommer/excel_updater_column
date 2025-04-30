@@ -91,7 +91,7 @@ if orig_file and upd_file:
             fb_map   = df_upd.set_index(fb_cols, drop=False) if fb_cols else None
 
             matched, idx_guid, idx_fb = set(), set(), set()
-            green, blue, orange, yellow, red = set(), set(), set(), set(), set()
+            green, blue, orange, yellow, red, lavender = set(), set(), set(), set(), set(), set()
             c_guid = c_fb = c_area = c_unc = c_new = 0
             total = len(df) + len(full_map)
             pbar  = st.progress(0); step = 0
@@ -103,9 +103,7 @@ if orig_file and upd_file:
                 # GUID-Match?
                 if key in full_map.index:
                     upd = full_map.loc[key]
-                    if isinstance(upd, pd.DataFrame):
-                        upd = upd.iloc[0]
-                    # Series garantiert -> bearbeiten
+                    if isinstance(upd, pd.DataFrame): upd = upd.iloc[0]
                     if isinstance(upd, pd.Series):
                         matched.add(key); idx_guid.add(i)
                         used = False
@@ -124,7 +122,7 @@ if orig_file and upd_file:
                     fk = tuple(row[c] for c in fb_cols)
                     if fk in fb_map.index:
                         fbr = fb_map.loc[fk]
-                        if isinstance(fbr, pd.DataFrame) and len(fbr)==1:
+                        if isinstance(fbr, pd.DataFrame) and len(fbr) == 1:
                             fbr = fbr.iloc[0]
                         if isinstance(fbr, pd.Series):
                             fullk = tuple(fbr[c] for c in match_cols)
@@ -140,6 +138,12 @@ if orig_file and upd_file:
                                         used_fb = True
                                 for c in add_cols:
                                     df.at[i, c] = fbr[c]
+                                # Fallback ohne Änderung?
+                                if not used_fb:
+                                    for c in fb_cols:
+                                        r = i+2
+                                        c_idx = df.columns.get_loc(c)+1
+                                        lavender.add((r, c_idx))
                                 c_fb += 1 if used_fb else (c_unc := c_unc+1)
 
                 step += 1
@@ -153,20 +157,19 @@ if orig_file and upd_file:
                 o = df.loc[i]
                 for k in upd_un:
                     u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame):
-                        u = u.iloc[0]
+                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
                     if all(o[c] == u[c] for c in fb_cols):
                         diff = abs(o["Fläche"] - u["Fläche"])
                         if diff <= tol:
                             pairs.append((i, k, diff))
                         else:
+                            # Toleranz überschritten → rot markieren
                             red.add((i+2, df.columns.get_loc("Fläche")+1))
             pairs.sort(key=lambda x: x[2])
             for i, k, _ in pairs:
                 if i not in idx_guid|idx_fb and k not in matched:
                     u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame):
-                        u = u.iloc[0]
+                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
                     for c in overwrite_cols:
                         ov = df.at[i, c]
                         df.at[i, f"{c} zuvor"] = ov
@@ -184,9 +187,7 @@ if orig_file and upd_file:
             for k in full_map.index.unique():
                 if k not in matched:
                     u = full_map.loc[k]
-                    if isinstance(u, pd.DataFrame):
-                        u = u.iloc[0]
-                    # nur übernehmen, wenn exist.cols leer oder in adopt
+                    if isinstance(u, pd.DataFrame): u = u.iloc[0]
                     if exist_cols:
                         ek = tuple(u[c] for c in exist_cols)
                         if ek not in adopt:
@@ -227,7 +228,8 @@ if orig_file and upd_file:
                     "b": PatternFill(start_color="ADD8E6", fill_type="solid"),
                     "o": PatternFill(start_color="FFD966", fill_type="solid"),
                     "y": PatternFill(start_color="FFFF00", fill_type="solid"),
-                    "r": PatternFill(start_color="FFC7CE", fill_type="solid")
+                    "r": PatternFill(start_color="FFC7CE", fill_type="solid"),
+                    "l": PatternFill(start_color="E6E6FA", fill_type="solid")  # Lavendel
                 }
                 for (r, c) in green:
                     ws.cell(row=r, column=c).fill = fmt["g"]
@@ -239,6 +241,8 @@ if orig_file and upd_file:
                     ws.cell(row=r, column=c).fill = fmt["y"]
                 for (r, c) in red:
                     ws.cell(row=r, column=c).fill = fmt["r"]
+                for (r, c) in lavender:
+                    ws.cell(row=r, column=c).fill = fmt["l"]
             buf.seek(0)
 
             # Zusammenfassung
@@ -246,7 +250,8 @@ if orig_file and upd_file:
             st.success(f"🔁 GUID-Updates: {c_guid}")
             st.info   (f"🔷 Fallback-Updates: {c_fb}")
             st.info   (f"🔶 Toleranz-Updates: {c_area}")
-            st.warning(f"⚠️ Suspicious (Toleranz überschritten): {len(red)}")
+            st.warning(f"❌ Toleranz überschritten (rot): {len(red)}")
+            st.info   (f"🔮 Fallback ohne Änderung (lavendel): {len(lavender)}")
             st.info   (f"➕ Neu übernommen: {c_new}")
             st.info   (f"✅ Unverändert: {c_unc}")
 
