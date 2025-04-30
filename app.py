@@ -60,7 +60,7 @@ if orig_file and upd_file:
         grp = st.selectbox("Gruppieren nach", common, index=common.index("Haus") if "Haus" in common else 0)
         if "Fläche" in common:
             sum_o = df_orig.groupby(grp)["Fläche"].sum().reset_index(name="Summe O")
-            sum_u = df_upd .groupby(grp)["Fläche"].sum().reset_index(name="Summe U")
+            sum_u = df_upd.groupby(grp)["Fläche"].sum().reset_index(name="Summe U")
             st.dataframe(pd.merge(sum_o, sum_u, on=grp, how="outer").fillna(0), use_container_width=True)
 
         # — Parameter —
@@ -74,12 +74,12 @@ if orig_file and upd_file:
         exist_cols = st.multiselect("Existenz-Attribute", [c for c in common if c!="GUID"])
         adopt = []
         if exist_cols:
-            orig_set = {tuple(r[c] for c in exist_cols) for _,r in df_orig.iterrows()}
+            orig_set = {tuple(r[c] for c in exist_cols) for _, r in df_orig.iterrows()}
             upd_sub  = df_upd.drop_duplicates(exist_cols)
             miss     = upd_sub[~upd_sub.apply(lambda r: tuple(r[c] for c in exist_cols) in orig_set, axis=1)]
             if not miss.empty:
                 st.subheader("⚠️ Fehlende Kombinationen")
-                for i,r in miss.iterrows():
+                for i, r in miss.iterrows():
                     lbl = " | ".join(f"{c}:{r[c]}" for c in exist_cols)
                     if st.checkbox(f"Übernehmen {lbl}", key=f"cb{i}"):
                         adopt.append(tuple(r[c] for c in exist_cols))
@@ -100,44 +100,47 @@ if orig_file and upd_file:
             for i in range(len(df)):
                 row = df.loc[i]
                 key = tuple(row[c] for c in match_cols)
-                upd = full_map.loc[key] if key in full_map.index else None
-                used = False
-
-                if isinstance(upd, pd.DataFrame):
-                    upd = upd.iloc[0]
-                if isinstance(upd, pd.Series):
-                    matched.add(key); idx_guid.add(i)
-                    for c in overwrite_cols:
-                        nv, ov = upd[c], row[c]
-                        if pd.notna(nv) and nv != ov:
-                            df.at[i, f"{c} zuvor"] = ov
-                            df.at[i, c]            = nv
-                            green.add((i+2, df.columns.get_loc(c)+1))
-                            used = True
-                    for c in add_cols:
-                        df.at[i, c] = upd[c]
-                    c_guid += 1 if used else (c_unc := c_unc+1)
-
+                # GUID-Match?
+                if key in full_map.index:
+                    upd = full_map.loc[key]
+                    if isinstance(upd, pd.DataFrame):
+                        upd = upd.iloc[0]
+                    # Series garantiert -> bearbeiten
+                    if isinstance(upd, pd.Series):
+                        matched.add(key); idx_guid.add(i)
+                        used = False
+                        for c in overwrite_cols:
+                            nv, ov = upd[c], row[c]
+                            if pd.notna(nv) and nv != ov:
+                                df.at[i, f"{c} zuvor"] = ov
+                                df.at[i, c]            = nv
+                                green.add((i+2, df.columns.get_loc(c)+1))
+                                used = True
+                        for c in add_cols:
+                            df.at[i, c] = upd[c]
+                        c_guid += 1 if used else (c_unc := c_unc+1)
+                # Fallback-Match?
                 elif fb_map is not None:
                     fk = tuple(row[c] for c in fb_cols)
-                    fbr = fb_map.loc[fk] if fk in fb_map.index else None
-                    if isinstance(fbr, pd.DataFrame) and len(fbr) == 1:
-                        fbr = fbr.iloc[0]
-                    if isinstance(fbr, pd.Series):
-                        fullk = tuple(fbr[c] for c in match_cols)
-                        if fullk in full_map.index and fullk not in matched:
-                            matched.add(fullk); idx_fb.add(i)
-                            used_fb = False
-                            for c in overwrite_cols:
-                                nv, ov = fbr[c], row[c]
-                                if pd.notna(nv) and nv != ov:
-                                    df.at[i, f"{c} zuvor"] = ov
-                                    df.at[i, c]            = nv
-                                    blue.add((i+2, df.columns.get_loc(c)+1))
-                                    used_fb = True
-                            for c in add_cols:
-                                df.at[i, c] = fbr[c]
-                            c_fb += 1 if used_fb else (c_unc := c_unc+1)
+                    if fk in fb_map.index:
+                        fbr = fb_map.loc[fk]
+                        if isinstance(fbr, pd.DataFrame) and len(fbr)==1:
+                            fbr = fbr.iloc[0]
+                        if isinstance(fbr, pd.Series):
+                            fullk = tuple(fbr[c] for c in match_cols)
+                            if fullk in full_map.index and fullk not in matched:
+                                matched.add(fullk); idx_fb.add(i)
+                                used_fb = False
+                                for c in overwrite_cols:
+                                    nv, ov = fbr[c], row[c]
+                                    if pd.notna(nv) and nv != ov:
+                                        df.at[i, f"{c} zuvor"] = ov
+                                        df.at[i, c]            = nv
+                                        blue.add((i+2, df.columns.get_loc(c)+1))
+                                        used_fb = True
+                                for c in add_cols:
+                                    df.at[i, c] = fbr[c]
+                                c_fb += 1 if used_fb else (c_unc := c_unc+1)
 
                 step += 1
                 pbar.progress(min(1.0, step/total))
@@ -183,6 +186,7 @@ if orig_file and upd_file:
                     u = full_map.loc[k]
                     if isinstance(u, pd.DataFrame):
                         u = u.iloc[0]
+                    # nur übernehmen, wenn exist.cols leer oder in adopt
                     if exist_cols:
                         ek = tuple(u[c] for c in exist_cols)
                         if ek not in adopt:
@@ -199,16 +203,16 @@ if orig_file and upd_file:
 
             # Spalten ordnen
             base = list(df_orig_base.columns)
-            new_order = []
+            order = []
             for c in base:
-                new_order.append(c)
+                order.append(c)
                 pv = f"{c} zuvor"
                 if pv in df.columns:
-                    new_order.append(pv)
+                    order.append(pv)
             for c in df.columns:
-                if c not in new_order:
-                    new_order.append(c)
-            df = df[new_order]
+                if c not in order:
+                    order.append(c)
+            df = df[order]
 
             # 4) Export mit Styling
             buf = io.BytesIO()
