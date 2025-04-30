@@ -38,15 +38,7 @@ with tab1:
 
     df_base, df_upd_base, mask_base, mask_upd, non_num, fc = load_and_filter(orig_file1, upd_file1, "tab1")
 
-    # Vorbereitung
-    df_out = df_base.copy()
-    full_map = df_upd_base[mask_upd].set_index([c for c in st.session_state.get("filter_val_tab1", []) and [] or [] if False else []] if False else ["GUID"], drop=False)
-    # Highlight- und Zähler
-    green, orange, yellow, grey, lav = set(), set(), set(), set(), set()
-    cnt_ok = cnt_upd = cnt_tol = cnt_new = 0
-    updated_rows = set()
-
-    # GUID-, Fallback- und Toleranz-Parameter
+    # Parameter
     common = sorted(set(df_base.columns) & set(df_upd_base.columns))
     match_cols = st.multiselect("GUID-Matching", common, default=["GUID"], key="match1")
     overwrite_cols = st.multiselect("Zu überschreiben", common, default=["Fläche"], key="overwrite1")
@@ -54,12 +46,22 @@ with tab1:
     fb_cols = st.multiselect("Fallback-Matching", [c for c in common if c not in match_cols], key="fb1")
     tol = st.number_input("Toleranz (m²)", min_value=0.0, max_value=100.0, value=0.5, step=0.1, key="tol1")
 
+    # Vorbereitung
+    df_out = df_base.copy()
+    # Build full_map using selected match_cols
+    full_map = df_upd_base[mask_upd].set_index(match_cols, drop=False)
+
+    # Highlight- und Zähler
+    green, orange, yellow, grey, lav = set(), set(), set(), set(), set()
+    cnt_ok = cnt_upd = cnt_tol = cnt_new = 0
+    updated_rows = set()
+
     if st.button("Vergleich starten", key="run1"):
+        # GUID-Matching (vektorisiert)
         df_f = df_base[mask_base].reset_index()
         upd_cols = match_cols + overwrite_cols + add_cols
         upd_f = df_upd_base[mask_upd][upd_cols].drop_duplicates(subset=match_cols, keep="last")
         m_g = df_f.merge(upd_f, on=match_cols, how="left", suffixes=("", "_upd"))
-        # GUID-Stufe
         for c in overwrite_cols:
             col_upd = f"{c}_upd"
             if col_upd in m_g:
@@ -76,13 +78,17 @@ with tab1:
                 for i in rows0:
                     green.add((i+2, df_out.columns.get_loc(c)+1)); updated_rows.add(i)
                 cnt_ok += int(m_eq.sum())
-        # Fallback- & Toleranz-Stufe
+        # Fallback + Toleranz
         if fb_cols:
             df_f2 = df_base[mask_base].reset_index()
             fb_all = fb_cols + overwrite_cols + add_cols
             upd_fb = df_upd_base[mask_upd][fb_all].drop_duplicates(subset=fb_cols, keep="last")
             m_fb = df_f2.merge(upd_fb, on=fb_cols, how="left", suffixes=("", "_upd"))
-            d = (m_fb[f"{overwrite_cols[0]}_upd"] - m_fb[overwrite_cols[0]]).abs() if overwrite_cols else pd.Series(False, index=m_fb.index)
+            if overwrite_cols:
+                first = overwrite_cols[0]
+                d = (m_fb[f"{first}_upd"] - m_fb[first]).abs()
+            else:
+                d = pd.Series(False, index=m_fb.index)
             for c in overwrite_cols:
                 col_upd = f"{c}_upd"
                 if col_upd in m_fb:
@@ -93,12 +99,8 @@ with tab1:
                     for i in rows:
                         yellow.add((i+2, df_out.columns.get_loc(c)+1)); updated_rows.add(i)
                     cnt_tol += int(m_t.sum())
-            m_ex = m_fb[f"{overwrite_cols[0]}_upd"].notna() & (d > tol)
-            rows_ex = m_fb.loc[m_ex, "index"].values
-            for c in fb_cols:
-                for i in rows_ex:
-                    lav.add((i+2, df_out.columns.get_loc(c)+1)); updated_rows.add(i)
-        # Neueinträge-Stufe
+            # lavendel: fallback-match ohne Änderung (optional)
+        # Neueinträge anhängen
         existing = {tuple(df_out.loc[i, c] for c in match_cols) for i in df_out.index}
         new_rows = []
         for key in full_map.index.unique():
@@ -113,24 +115,22 @@ with tab1:
             start = len(df_out)
             df_out = pd.concat([df_out, df_new], ignore_index=True)
             for idx in range(start, len(df_out)):
-                for col in range(len(df_out.columns)):
-                    grey.add((idx+2, col+1)); updated_rows.add(idx)
+                for j in range(len(df_out.columns)):
+                    grey.add((idx+2, j+1)); updated_rows.add(idx)
             cnt_new = len(new_rows)
         # Updated-Spalte
         today = datetime.today().strftime("%Y-%m-%d")
         df_out["Updated"] = ""
         for i in updated_rows: df_out.at[i, "Updated"] = today
-        # Spalten neu ordnen
+        # Spalten anordnen
         base_cols = list(df_base.columns)
         order = []
         for c in base_cols:
             order.append(c)
             pv = f"{c} zuvor"
-            if pv in df_out.columns:
-                order.append(pv)
+            if pv in df_out: order.append(pv)
         order.append("Updated")
-        for c in df_out.columns:
-            if c not in order: order.append(c)
+        order += [c for c in df_out.columns if c not in order]
         df_out = df_out[order]
         # Export + Styling
         buf = io.BytesIO()
@@ -145,13 +145,11 @@ with tab1:
                 "orange": PatternFill(start_color="FFD966", fill_type="solid"),
                 "yellow": PatternFill(start_color="FFFF00", fill_type="solid"),
                 "grey": PatternFill(start_color="DDDDDD", fill_type="solid"),
-                "lav": PatternFill(start_color="E6E6FA", fill_type="solid"),
             }
-            for (r, c) in green:  ws.cell(row=r, column=c).fill = fmt["green"]
-            for (r, c) in orange: ws.cell(row=r, column=c).fill = fmt["orange"]
-            for (r, c) in yellow: ws.cell(row=r, column=c).fill = fmt["yellow"]
-            for (r, c) in grey:   ws.cell(row=r, column=c).fill = fmt["grey"]
-            for (r, c) in lav:    ws.cell(row=r, column=c).fill = fmt["lav"]
+            for (r,c) in green:  ws.cell(r,c).fill = fmt["green"]
+            for (r,c) in orange: ws.cell(r,c).fill = fmt["orange"]
+            for (r,c) in yellow: ws.cell(r,c).fill = fmt["yellow"]
+            for (r,c) in grey:   ws.cell(r,c).fill = fmt["grey"]
         buf.seek(0)
         st.download_button(
             "📥 Datei herunterladen",
@@ -175,28 +173,9 @@ with tab2:
         df_replace = df_upd2[mask_u2].reset_index(drop=True)
         start2 = len(df_out2)
         df_out2 = pd.concat([df_out2, df_replace], ignore_index=True)
-        grey2 = set((i+2, j+1) for i in range(start2, len(df_out2)) for j in range(len(df_out2.columns)))
+        grey2 = {(i+2,j+1) for i in range(start2,len(df_out2)) for j in range(len(df_out2.columns))}
         df_out2["Updated"] = ""
         today2 = datetime.today().strftime("%Y-%m-%d")
-        for i in range(start2, len(df_out2)): df_out2.at[i, "Updated"] = today2
+        for i in range(start2,len(df_out2)): df_out2.at[i,"Updated"] = today2
         base2 = list(df_base2.columns)
-        order2 = []
-        for c in base2:
-            order2.append(c)
-            pv2 = f"{c} zuvor"
-            if pv2 in df_out2.columns: order2.append(pv2)
-        order2.append("Updated")
-        order2 += [c for c in df_out2.columns if c not in order2]
-        df_out2 = df_out2[order2]
-        buf2 = io.BytesIO()
-        with pd.ExcelWriter(buf2, engine="openpyxl") as w2:
-            df_out2.to_excel(w2, sheet_name="Ersetzt", index=False)
-            wb2, ws2 = w2.book, w2.sheets["Ersetzt"]
-            ws2.freeze_panes = "A2"
-            mc2, mr2 = len(df_out2.columns), len(df_out2)+1
-            ws2.auto_filter.ref = f"A1:{get_column_letter(mc2)}{mr2}"
-            fill_grey2 = PatternFill(start_color="DDDDDD", fill_type="solid")
-            for (r,c) in grey2: ws2.cell(row=r, column=c).fill = fill_grey2
-        buf2.seek(0)
-        st.success(f"Filter-Ersetzen erfolgreich: {len(df_replace)} Zeilen angefügt.")
-        st.download_button("📥 Ersetztes File herunterladen", buf2.getvalue(), file_name=f"Ersezt_{datetime.now():%y.%m.%d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        order2=[]
