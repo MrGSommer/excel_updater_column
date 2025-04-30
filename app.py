@@ -4,6 +4,7 @@ import io
 from datetime import datetime
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
+from pandas.api.types import is_numeric_dtype
 
 # ── App-Layout ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="IFC Räume Excel Vergleich", layout="wide")
@@ -174,7 +175,7 @@ if st.button("Vergleich starten"):
                 ws.cell(r,c).fill = fmt[colset]
         # strike through other numeric cells in updated rows, except GUID and updated cells
         num_cols = [i+1 for i,c in enumerate(df_out.columns) 
-                    if pd.api.types.is_number_dtype(df_out[c]) and c!="GUID"]
+                    if is_numeric_dtype(df_out[c]) and c!="GUID":
         updated_cells = set().union(*highlight.values())
         for r in [i+2 for i in updated_rows]:
             for c in num_cols:
