@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from datetime import datetime
+import os
 
 st.title("Excel Vergleich: Original vs. Update")
 
@@ -44,7 +46,7 @@ if original_file and update_file:
                             if pd.notna(new_value) and original_value != new_value:
                                 df_merged.at[idx, col + " zuvor"] = original_value
                                 df_merged.at[idx, col] = new_value
-                                changed_cells.add((idx + 1, df_merged.columns.get_loc(col)))  # +1 für Excel-Zeile
+                                changed_cells.add((idx + 1, df_merged.columns.get_loc(col)))  # Excel-Zeile +1
                         for col in additional_columns:
                             df_merged.at[idx, col] = update_row.get(col)
 
@@ -53,7 +55,7 @@ if original_file and update_file:
                 # --- Anzeige ---
                 st.dataframe(df_merged)
 
-                # --- Export mit Styling ---
+                # --- Export ---
                 towrite = BytesIO()
                 with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
                     df_merged.to_excel(writer, index=False, sheet_name='Vergleich')
@@ -63,11 +65,22 @@ if original_file and update_file:
                     for row, col in changed_cells:
                         worksheet.write(row, col, df_merged.iloc[row - 1, col], green_format)
 
-                    worksheet.freeze_panes(1, 0)  # Kopfzeile fixieren
+                    worksheet.freeze_panes(1, 0)
                     worksheet.autofilter(0, 0, len(df_merged), len(df_merged.columns) - 1)
 
                 towrite.seek(0)
-                st.download_button("Vergleich herunterladen mit Formatierung", towrite, "Vergleich.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                # --- Dateiname ---
+                date_str = datetime.now().strftime("%y.%m.%d")
+                original_name = os.path.splitext(original_file.name)[0]
+                export_filename = f"Updated_{date_str}_{original_name}.xlsx"
+
+                st.download_button(
+                    label="Vergleich herunterladen mit Formatierung",
+                    data=towrite,
+                    file_name=export_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
     except Exception as e:
         st.error(f"Fehler: {e}")
