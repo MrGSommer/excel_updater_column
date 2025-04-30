@@ -21,6 +21,12 @@ if uploaded_original and uploaded_update:
     common_cols = list(set(df_original.columns) & set(df_update.columns))
     common_cols.sort()
 
+    st.subheader("🔍 Vorschau: Original-Datei")
+    st.dataframe(df_original.head(5), use_container_width=True)
+
+    st.subheader("🔍 Vorschau: Update-Datei")
+    st.dataframe(df_update.head(5), use_container_width=True)
+    
     if "GUID" not in common_cols:
         st.error("Beide Dateien müssen die Spalte 'GUID' enthalten.")
         st.stop()
