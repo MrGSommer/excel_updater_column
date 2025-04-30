@@ -16,8 +16,29 @@ uploaded_update   = st.file_uploader("Update Excel hochladen",   type=["xlsx"])
 if uploaded_original and uploaded_update:
     try:
         # 📑 Daten einlesen
-        df_original = pd.read_excel(uploaded_original)
-        df_update   = pd.read_excel(uploaded_update)
+        df_original_base = pd.read_excel(uploaded_original)
+        df_update_base   = pd.read_excel(uploaded_update)
+
+        # — Filter: Spalte & Werte auswählen —
+        # nur nicht-numerische Spalten anbieten
+        candidate_cols = df_original_base.select_dtypes(exclude=["number"]).columns.tolist()
+        if candidate_cols:
+            filter_col = st.selectbox(
+                "🗂️ Filter-Spalte auswählen",
+                options=candidate_cols
+            )
+            values = df_original_base[filter_col].dropna().unique().tolist()
+            selected_values = st.multiselect(
+                f"🔎 {filter_col}-Werte filtern",
+                options=values,
+                default=values
+            )
+            # gefilterte DataFrames
+            df_original = df_original_base[df_original_base[filter_col].isin(selected_values)].reset_index(drop=True)
+            df_update   = df_update_base  [df_update_base  [filter_col].isin(selected_values)].reset_index(drop=True)
+        else:
+            df_original = df_original_base.copy()
+            df_update   = df_update_base.copy()
 
         # — Sidebar: Übersicht mit Metrics & Deltas —
         for df in (df_original, df_update):
@@ -28,8 +49,8 @@ if uploaded_original and uploaded_update:
         n_upd      = df_update.shape[0]
         orig_guids = df_original['GUID'].nunique() if 'GUID' in df_original.columns else 0
         upd_guids  = df_update['GUID'].nunique()   if 'GUID' in df_update.columns   else 0
-        orig_total = df_original['Fläche'].sum() if 'Fläche' in df_original.columns else 0
-        upd_total  = df_update['Fläche'].sum()   if 'Fläche' in df_update.columns   else 0
+        orig_total = df_original['Fläche'].sum()    if 'Fläche' in df_original.columns else 0
+        upd_total  = df_update['Fläche'].sum()      if 'Fläche' in df_update.columns   else 0
 
         st.sidebar.header("📊 Kurzübersicht")
         st.sidebar.metric("Zeilen Original", n_orig, delta=n_upd - n_orig)
@@ -94,22 +115,23 @@ if uploaded_original and uploaded_update:
 
         # — Vergleich starten —
         if st.button("Vergleich starten"):
+            # Kopien
             df_orig_copy = df_original.copy()
             df_upd_copy  = df_update.copy()
 
-            full_map   = df_upd_copy.set_index(match_columns, drop=False)
-            fb_map     = df_upd_copy.set_index(fallback_columns, drop=False) if fallback_columns else None
+            full_map = df_upd_copy.set_index(match_columns, drop=False)
+            fb_map   = df_upd_copy.set_index(fallback_columns, drop=False) if fallback_columns else None
 
-            matched_keys          = set()
-            matched_guid_idx      = set()
-            matched_fallback_idx  = set()
+            matched_keys         = set()
+            matched_guid_idx     = set()
+            matched_fallback_idx = set()
 
             green_cells   = set()  # GUID-Matches
             blue_cells    = set()  # Fallback-Matches
             orange_cells  = set()  # Toleranz-Matches
             yellow_cells  = set()  # Neue Einträge
 
-            cnt_guid    = cnt_fb = cnt_area = cnt_unchanged = 0
+            cnt_guid = cnt_fb = cnt_area = cnt_unchanged = 0
 
             # Progress Bar
             initial_len = df_orig_copy.shape[0]
@@ -117,7 +139,7 @@ if uploaded_original and uploaded_update:
             progress    = st.progress(0)
             step = 0
 
-            # 1) GUID- & Fallback-Matching
+            # 1) GUID & Fallback
             for idx in range(initial_len):
                 row = df_orig_copy.loc[idx]
                 key = tuple(row[c] for c in match_columns)
@@ -127,123 +149,128 @@ if uploaded_original and uploaded_update:
                     if isinstance(upd, pd.DataFrame): upd = upd.iloc[0]
                     matched_keys.add(key); matched_guid_idx.add(idx)
 
-                    changed=False
+                    changed = False
                     for col in overwrite_columns:
                         nv, ov = upd[col], row[col]
-                        if pd.notna(nv) and ov!=nv:
+                        if pd.notna(nv) and ov != nv:
                             df_orig_copy.at[idx, f"{col} zuvor"] = ov
                             df_orig_copy.at[idx, col]             = nv
-                            r, c = idx+2, df_orig_copy.columns.get_loc(col)+1
-                            green_cells.add((r,c)); changed=True
+                            green_cells.add((idx+2, df_orig_copy.columns.get_loc(col)+1))
+                            changed = True
                     for col in additional_columns:
-                        df_orig_copy.at[idx,col]=upd[col]
-                    cnt_guid += 1 if changed else (cnt_unchanged:=cnt_unchanged+1)
+                        df_orig_copy.at[idx, col] = upd[col]
+                    cnt_guid += 1 if changed else (cnt_unchanged := cnt_unchanged+1)
 
                 elif fb_map is not None:
                     fb_key = tuple(row[c] for c in fallback_columns)
                     if fb_key in fb_map.index:
                         fb = fb_map.loc[fb_key]
-                        if isinstance(fb, pd.DataFrame) and len(fb)==1: fb=fb.iloc[0]
-                        elif isinstance(fb, pd.DataFrame): fb=None
+                        if isinstance(fb, pd.DataFrame) and len(fb)==1: fb = fb.iloc[0]
+                        elif isinstance(fb, pd.DataFrame): fb = None
                         if fb is not None:
                             full_key = tuple(fb[c] for c in match_columns)
                             if full_key in full_map.index and full_key not in matched_keys:
                                 matched_keys.add(full_key); matched_fallback_idx.add(idx)
-                                changed_fb=False
+                                changed_fb = False
                                 for col in overwrite_columns:
                                     nv, ov = fb[col], row[col]
-                                    if pd.notna(nv) and ov!=nv:
-                                        df_orig_copy.at[idx, f"{col} zuvor"]=ov
-                                        df_orig_copy.at[idx, col]            =nv
-                                        r,c=idx+2, df_orig_copy.columns.get_loc(col)+1
-                                        blue_cells.add((r,c)); changed_fb=True
+                                    if pd.notna(nv) and ov != nv:
+                                        df_orig_copy.at[idx, f"{col} zuvor"] = ov
+                                        df_orig_copy.at[idx, col]             = nv
+                                        blue_cells.add((idx+2, df_orig_copy.columns.get_loc(col)+1))
+                                        changed_fb = True
                                 for col in additional_columns:
-                                    df_orig_copy.at[idx,col]=fb[col]
-                                cnt_fb += 1 if changed_fb else (cnt_unchanged:=cnt_unchanged+1)
+                                    df_orig_copy.at[idx, col] = fb[col]
+                                cnt_fb += 1 if changed_fb else (cnt_unchanged := cnt_unchanged+1)
 
                 step += 1
                 progress.progress(min(1.0, step/total_steps))
 
-            # 2) Flächen-Toleranz-Matching
+            # 2) Flächen-Toleranz
             orig_unm = {i for i in range(initial_len) if i not in matched_guid_idx|matched_fallback_idx}
             upd_unm  = [k for k in full_map.index if k not in matched_keys]
-            area_pairs=[]
+            pairs = []
             for i in orig_unm:
-                o=df_orig_copy.loc[i]
+                o = df_orig_copy.loc[i]
                 for k in upd_unm:
-                    u=full_map.loc[k]; u=u.iloc[0] if isinstance(u,pd.DataFrame) else u
-                    if all(o[c]==u[c] for c in fallback_columns):
-                        d=abs(o['Fläche']-u['Fläche'])
-                        if d<=tolerance: area_pairs.append((i,k,d))
-            area_pairs.sort(key=lambda x: x[2])
-            for i,k,_ in area_pairs:
+                    u = full_map.loc[k]
+                    u = u.iloc[0] if isinstance(u, pd.DataFrame) else u
+                    if all(o[c] == u[c] for c in fallback_columns):
+                        diff = abs(o['Fläche'] - u['Fläche'])
+                        if diff <= tolerance:
+                            pairs.append((i, k, diff))
+            pairs.sort(key=lambda x: x[2])
+            for i, k, _ in pairs:
                 if i not in matched_guid_idx|matched_fallback_idx and k not in matched_keys:
-                    u=full_map.loc[k]; u=u.iloc[0] if isinstance(u,pd.DataFrame) else u
+                    u = full_map.loc[k]; u = u.iloc[0] if isinstance(u, pd.DataFrame) else u
                     for col in overwrite_columns:
-                        ov=df_orig_copy.at[i,col]
-                        df_orig_copy.at[i,f"{col} zuvor"]=ov
-                        df_orig_copy.at[i,col]=u[col]
-                        r,c=i+2, df_orig_copy.columns.get_loc(col)+1
-                        orange_cells.add((r,c))
+                        ov = df_orig_copy.at[i, col]
+                        df_orig_copy.at[i, f"{col} zuvor"] = ov
+                        df_orig_copy.at[i, col]             = u[col]
+                        orange_cells.add((i+2, df_orig_copy.columns.get_loc(col)+1))
                     for col in additional_columns:
-                        df_orig_copy.at[i,col]=u[col]
-                    matched_keys.add(k); cnt_area+=1
-            for _ in upd_unm: 
-                step+=1; progress.progress(min(1.0, step/total_steps))
+                        df_orig_copy.at[i, col] = u[col]
+                    matched_keys.add(k); cnt_area += 1
+            for _ in upd_unm:
+                step += 1; progress.progress(min(1.0, step/total_steps))
 
             # 3) Neue GUIDs anhängen
             for k in full_map.index.unique():
                 if k not in matched_keys:
-                    u=full_map.loc[k]; u=u.iloc[0] if isinstance(u,pd.DataFrame) else u
-                    d=u.to_dict()
-                    for col in overwrite_columns: d[f"{col} zuvor"]=None
-                    df_orig_copy=pd.concat([df_orig_copy,pd.DataFrame([d])],ignore_index=True)
-                    idx_new=df_orig_copy.shape[0]-1
+                    u = full_map.loc[k]
+                    u = u.iloc[0] if isinstance(u, pd.DataFrame) else u
+                    d = u.to_dict()
+                    for col in overwrite_columns:
+                        d[f"{col} zuvor"] = None
+                    df_orig_copy = pd.concat([df_orig_copy, pd.DataFrame([d])], ignore_index=True)
+                    new_idx = df_orig_copy.shape[0] - 1
                     for ci in range(len(df_orig_copy.columns)):
-                        yellow_cells.add((idx_new+2,ci+1))
+                        yellow_cells.add((new_idx+2, ci+1))
                     matched_keys.add(k)
 
-            # Spalten neu anordnen („... zuvor“ neben Original)
-            base_cols=list(df_original.columns)
-            new_order=[]
-            for c in base_cols:
-                new_order.append(c)
-                p=f"{c} zuvor"
-                if p in df_orig_copy.columns: new_order.append(p)
+            # Spalten neu anordnen
+            base = list(df_original_base.columns)
+            order = []
+            for c in base:
+                order.append(c)
+                p = f"{c} zuvor"
+                if p in df_orig_copy.columns:
+                    order.append(p)
             for c in df_orig_copy.columns:
-                if c not in new_order: new_order.append(c)
-            df_orig_copy=df_orig_copy[new_order]
+                if c not in order:
+                    order.append(c)
+            df_orig_copy = df_orig_copy[order]
 
-            # 4) Excel-Export mit Styling
-            buffer=io.BytesIO()
+            # 4) Export mit Styling
+            buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df_orig_copy.to_excel(writer, sheet_name="Vergleich", index=False)
-                wb=writer.book; ws=writer.sheets["Vergleich"]
-                ws.freeze_panes="A2"
-                max_c, max_r=df_orig_copy.shape[1], df_orig_copy.shape[0]+1
-                ws.auto_filter.ref=f"A1:{get_column_letter(max_c)}{max_r}"
-                green = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
-                blue  = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
-                orange= PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
-                yellow= PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-                for (r,c) in green_cells:  ws.cell(r,c).fill=green
-                for (r,c) in blue_cells:   ws.cell(r,c).fill=blue
-                for (r,c) in orange_cells: ws.cell(r,c).fill=orange
-                for (r,c) in yellow_cells: ws.cell(r,c).fill=yellow
+                wb = writer.book; ws = writer.sheets["Vergleich"]
+                ws.freeze_panes = "A2"
+                max_c, max_r = df_orig_copy.shape[1], df_orig_copy.shape[0] + 1
+                ws.auto_filter.ref = f"A1:{get_column_letter(max_c)}{max_r}"
+                green  = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
+                blue   = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+                orange = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
+                yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                for (r, c) in green_cells:  ws.cell(row=r, column=c).fill = green
+                for (r, c) in blue_cells:   ws.cell(row=r, column=c).fill = blue
+                for (r, c) in orange_cells: ws.cell(row=r, column=c).fill = orange
+                for (r, c) in yellow_cells: ws.cell(row=r, column=c).fill = yellow
             buffer.seek(0)
 
             # — Zusammenfassung —
             st.markdown("### Zusammenfassung")
-            st.success    (f"🔁 GUID-Updates: {cnt_guid}")
-            st.info       (f"🔷 Fallback-Updates: {cnt_fb}")
-            st.info       (f"🔶 Flächen-Toleranz-Updates: {cnt_area}")
-            st.info       (f"✅ Unverändert: {cnt_unchanged}")
-            st.warning    (f"➕ Neue Einträge ergänzt: {len([k for k in full_map.index if k not in matched_keys])}")
+            st.success(f"🔁 GUID-Updates: {cnt_guid}")
+            st.info   (f"🔷 Fallback-Updates: {cnt_fb}")
+            st.info   (f"🔶 Flächen-Toleranz-Updates: {cnt_area}")
+            st.info   (f"✅ Unverändert: {cnt_unchanged}")
+            st.warning(f"➕ Neue Einträge ergänzt: {len([k for k in full_map.index if k not in matched_keys])}")
 
             # — Download —
-            date_str   = datetime.now().strftime("%y.%m.%d")
-            orig_name  = uploaded_original.name.replace(".xlsx","")
-            export_name= f"Updated_{date_str}_{orig_name}.xlsx"
+            today = datetime.now().strftime("%y.%m.%d")
+            base_name = uploaded_original.name.replace(".xlsx", "")
+            export_name = f"Updated_{today}_{base_name}.xlsx"
             st.download_button(
                 label="📥 Datei herunterladen",
                 data=buffer.getvalue(),
